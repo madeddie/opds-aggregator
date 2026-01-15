@@ -242,6 +242,8 @@ func printResults(deployments []DeploymentMetrics, outputType string) {
 	fmt.Printf("%-30s %-15s %-15s %-15s\n", "DEPLOYMENT", "NAMESPACE", "CPU", "MEMORY")
 	fmt.Println("================================================================================")
 
+	var totalCPU, totalMemory int64
+
 	for _, dm := range deployments {
 		var cpu, memory string
 
@@ -249,13 +251,19 @@ func printResults(deployments []DeploymentMetrics, outputType string) {
 		case OutputTypeUsage:
 			cpu = formatCPU(dm.Usage.CPU)
 			memory = formatMemory(dm.Usage.Memory)
+			totalCPU += dm.Usage.CPU
+			totalMemory += dm.Usage.Memory
 		case OutputTypeRequests:
 			cpu = formatCPU(dm.Requests.CPU)
 			memory = formatMemory(dm.Requests.Memory)
+			totalCPU += dm.Requests.CPU
+			totalMemory += dm.Requests.Memory
 		case OutputTypeMaxRequests:
 			if dm.HPAMaxReplicas > 0 {
 				cpu = formatCPU(dm.MaxRequests.CPU)
 				memory = formatMemory(dm.MaxRequests.Memory)
+				totalCPU += dm.MaxRequests.CPU
+				totalMemory += dm.MaxRequests.Memory
 			} else {
 				cpu = "N/A (no HPA)"
 				memory = "N/A (no HPA)"
@@ -264,6 +272,10 @@ func printResults(deployments []DeploymentMetrics, outputType string) {
 
 		fmt.Printf("%-30s %-15s %-15s %-15s\n", dm.Name, dm.Namespace, cpu, memory)
 	}
+
+	// Print totals row
+	fmt.Println("================================================================================")
+	fmt.Printf("%-30s %-15s %-15s %-15s\n", "TOTAL", "", formatCPU(totalCPU), formatMemory(totalMemory))
 }
 
 func formatCPU(milliCores int64) string {

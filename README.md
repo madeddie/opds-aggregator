@@ -101,6 +101,8 @@ DEPLOYMENT                     NAMESPACE       CPU             MEMORY
 web-frontend                   production      1.50 cores      2.50 GB
 api-backend                    production      3.20 cores      4.00 GB
 worker                         production      800m            1.20 GB
+================================================================================
+TOTAL                                          5.50 cores      7.70 GB
 ```
 
 ### Example 2: View resource requests for a specific deployment
@@ -114,6 +116,8 @@ Output:
 DEPLOYMENT                     NAMESPACE       CPU             MEMORY
 ================================================================================
 web-frontend                   production      2.00 cores      4.00 GB
+================================================================================
+TOTAL                                          2.00 cores      4.00 GB
 ```
 
 ### Example 3: View max requests based on HPA
@@ -128,6 +132,8 @@ DEPLOYMENT                     NAMESPACE       CPU             MEMORY
 ================================================================================
 web-frontend                   production      10.00 cores     20.00 GB
 api-backend                    production      N/A (no HPA)    N/A (no HPA)
+================================================================================
+TOTAL                                          10.00 cores     20.00 GB
 ```
 
 ## How It Works
