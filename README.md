@@ -8,7 +8,9 @@ A CLI tool written in Go that interfaces with the Kubernetes API to retrieve res
 - Support for HPA (Horizontal Pod Autoscaler) max replica calculations
 - Multiple output modes
 - Configurable namespace and deployment filtering
-- Uses kubeconfig for Kubernetes API access
+- Two access modes:
+  - Direct Kubernetes API access via kubeconfig
+  - Porter API access for managed applications
 
 ## Prerequisites
 
@@ -56,12 +58,28 @@ sudo mv k8s-resource-cli /usr/local/bin/
 
 ### Command Line Arguments
 
+#### Common Arguments
+
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `-output` | Output type: `usage`, `requests`, or `max-requests` | `requests` |
+| `-deployment` | Specific deployment/application name | All deployments/applications |
+
+#### Kubernetes Direct Access
+
+| Argument | Description | Default |
+|----------|-------------|---------|
 | `-namespace` | Kubernetes namespace to query | Current context namespace or `default` |
-| `-deployment` | Specific deployment name | All deployments in namespace |
 | `-kubeconfig` | Path to kubeconfig file | `$KUBECONFIG` or `~/.kube/config` |
+
+#### Porter API Access
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `-porter` | Enable Porter API mode | `false` |
+| `-porter-token` | Porter API bearer token | `$PORTER_TOKEN` env var |
+| `-porter-project-id` | Porter project ID | `$PORTER_PROJECT_ID` env var |
+| `-porter-url` | Porter API base URL | `https://dashboard.porter.run` |
 
 ### Configuration
 
@@ -81,6 +99,28 @@ export KUBECONFIG=/path/to/my/kubeconfig
 
 # Override environment variable with command-line flag
 ./k8s-resource-cli -kubeconfig /different/path/config
+```
+
+**Porter API Configuration**
+
+To use Porter API mode, you need to provide authentication credentials:
+
+1. Via environment variables (recommended):
+```bash
+export PORTER_TOKEN="your-porter-api-token"
+export PORTER_PROJECT_ID="your-project-id"
+./k8s-resource-cli -porter -output requests
+```
+
+2. Via command-line flags:
+```bash
+./k8s-resource-cli -porter -porter-token "your-token" -porter-project-id "12345" -output requests
+```
+
+3. For self-hosted Porter instances:
+```bash
+export PORTER_BASE_URL="https://your-porter-instance.com"
+./k8s-resource-cli -porter -output max-requests
 ```
 
 ### Output Types
@@ -163,7 +203,41 @@ TOTAL                                 13.20 cores   24.00 GB
 
 Note: `web-frontend` has an HPA with max replicas of 10, showing scaled-up resources. `api-backend` has no HPA, so it shows current resource requests with max replicas being the desired replicas (3).
 
+### Example 4: View Porter applications resource requests
+
+```bash
+export PORTER_TOKEN="your-api-token"
+export PORTER_PROJECT_ID="12345"
+./k8s-resource-cli -porter -output requests
+```
+
+Output:
+```
+DEPLOYMENT         NAMESPACE                                REPLICAS   CPU          MEMORY
+web-app-web        dt-abc123-def456-ghi789                 1/3        1.00 cores   2.00 GB
+web-app-worker     dt-abc123-def456-ghi789                 2/5        2.00 cores   4.00 GB
+api-service-web    dt-xyz789-uvw456-rst123                 1/2        500m         1.00 GB
+TOTAL                                                                  3.50 cores   7.00 GB
+```
+
+### Example 5: View Porter applications max resource requests
+
+```bash
+./k8s-resource-cli -porter -output max-requests
+```
+
+Output:
+```
+DEPLOYMENT         NAMESPACE                                REPLICAS   CPU          MEMORY
+web-app-web        dt-abc123-def456-ghi789                 3          3.00 cores   6.00 GB
+web-app-worker     dt-abc123-def456-ghi789                 5          5.00 cores   10.00 GB
+api-service-web    dt-xyz789-uvw456-rst123                 2          1.00 cores   2.00 GB
+TOTAL                                                                  9.00 cores   18.00 GB
+```
+
 ## How It Works
+
+### Kubernetes Direct Access
 
 1. **Kubernetes Client**: The tool uses the official Kubernetes Go client library and connects to your cluster using the kubeconfig file.
 
@@ -172,6 +246,25 @@ Note: `web-frontend` has an HPA with max replicas of 10, showing scaled-up resou
 3. **Current Usage**: Queries the Metrics Server API to get real-time CPU and memory usage for running pods.
 
 4. **HPA Integration**: Looks up HorizontalPodAutoscaler resources associated with each deployment and calculates the total resources needed if scaled to max replicas.
+
+### Porter API Access
+
+1. **Porter Client**: The tool uses the Porter REST API with bearer token authentication to retrieve application information.
+
+2. **Application Discovery**: Calls `/api/v2/alpha/projects/{project_id}/applications` to list all applications in the project.
+
+3. **Service Details**: For each application, retrieves detailed service configuration including resource specifications and instance counts (min/max replicas).
+
+4. **Resource Calculation**:
+   - Parses CPU and memory values from service configurations (supports formats like "1000m", "1.5 cores", "512Mi", "2Gi")
+   - Calculates current requests based on minimum replicas
+   - Calculates max requests based on maximum replicas (similar to HPA max)
+   - Aggregates totals across all services and applications
+
+5. **Output Modes**:
+   - `requests`: Shows current resource requests based on minimum replicas
+   - `max-requests`: Shows maximum potential resource requests based on maximum replicas
+   - `usage`: Not supported in Porter API mode (requires direct cluster access)
 
 ## Label Selection
 
@@ -199,6 +292,28 @@ This ensures compatibility with different labeling conventions.
 ### Usage metrics show 0 or N/A
 - Metrics Server needs a few minutes to collect data after pods start
 - Verify Metrics Server is running: `kubectl get pods -n kube-system | grep metrics`
+
+### Porter API errors
+
+**"Error: Porter token required"**
+- Set the `PORTER_TOKEN` environment variable or use `-porter-token` flag
+- Get your token from the Porter dashboard settings
+
+**"Error: Porter project ID required"**
+- Set the `PORTER_PROJECT_ID` environment variable or use `-porter-project-id` flag
+- Find your project ID in the Porter dashboard URL or project settings
+
+**"API request failed with status 401"**
+- Your Porter token is invalid or expired
+- Generate a new token from the Porter dashboard
+
+**"API request failed with status 403"**
+- Your token doesn't have access to the specified project
+- Verify the project ID is correct and your account has access
+
+**"API request failed with status 404"**
+- The project ID doesn't exist or the API endpoint has changed
+- Verify your project ID and check if using the correct Porter instance URL
 
 ## License
 
