@@ -25,13 +25,14 @@ type ResourceMetrics struct {
 }
 
 type DeploymentMetrics struct {
-	Name         string
-	Namespace    string
-	Replicas     int32
-	Usage        ResourceMetrics
-	Requests     ResourceMetrics
-	MaxRequests  ResourceMetrics
-	HPAMaxReplicas int32
+	Name            string
+	Namespace       string
+	CurrentReplicas int32
+	DesiredReplicas int32
+	MaxReplicas     int32
+	Usage           ResourceMetrics
+	Requests        ResourceMetrics
+	MaxRequests     ResourceMetrics
 }
 
 func main() {
@@ -100,7 +101,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error getting deployment %s: %v\n", deploymentName, err)
 			os.Exit(1)
 		}
-		metrics, err := getDeploymentMetrics(ctx, clientset, metricsClientset, deployment.Namespace, deployment.Name, *deployment.Spec.Replicas)
+		metrics, err := getDeploymentMetrics(ctx, clientset, metricsClientset, deployment.Namespace, deployment.Name)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error getting metrics for deployment %s: %v\n", deploymentName, err)
 			os.Exit(1)
@@ -114,7 +115,7 @@ func main() {
 			os.Exit(1)
 		}
 		for _, deployment := range deploymentList.Items {
-			metrics, err := getDeploymentMetrics(ctx, clientset, metricsClientset, deployment.Namespace, deployment.Name, *deployment.Spec.Replicas)
+			metrics, err := getDeploymentMetrics(ctx, clientset, metricsClientset, deployment.Namespace, deployment.Name)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: Error getting metrics for deployment %s: %v\n", deployment.Name, err)
 				continue
@@ -149,38 +150,35 @@ func getNamespaceFromKubeconfig(kubeconfigPath string) (string, error) {
 	return "default", nil
 }
 
-func getDeploymentMetrics(ctx context.Context, clientset *kubernetes.Clientset, metricsClientset *versioned.Clientset, namespace, name string, replicas int32) (DeploymentMetrics, error) {
+func getDeploymentMetrics(ctx context.Context, clientset *kubernetes.Clientset, metricsClientset *versioned.Clientset, namespace, name string) (DeploymentMetrics, error) {
+	// Get the deployment first to get replicas information
+	deployment, err := clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return DeploymentMetrics{}, fmt.Errorf("error getting deployment: %w", err)
+	}
+
 	dm := DeploymentMetrics{
-		Name:      name,
-		Namespace: namespace,
-		Replicas:  replicas,
+		Name:            name,
+		Namespace:       namespace,
+		CurrentReplicas: deployment.Status.Replicas,
+		DesiredReplicas: *deployment.Spec.Replicas,
+		MaxReplicas:     *deployment.Spec.Replicas, // Default to desired, will be overridden by HPA if exists
+	}
+
+	// Get label selector from deployment
+	var labelSelector string
+	if deployment.Spec.Selector != nil {
+		labelSelector = metav1.FormatLabelSelector(deployment.Spec.Selector)
+	} else {
+		labelSelector = fmt.Sprintf("app=%s", name)
 	}
 
 	// Get pods for this deployment
-	labelSelector := fmt.Sprintf("app=%s", name)
 	pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
 	if err != nil {
 		return dm, fmt.Errorf("error listing pods: %w", err)
-	}
-
-	// If no pods found, try with alternative label selector
-	if len(pods.Items) == 0 {
-		deployment, err := clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return dm, fmt.Errorf("error getting deployment: %w", err)
-		}
-
-		if deployment.Spec.Selector != nil && deployment.Spec.Selector.MatchLabels != nil {
-			labelSelector = metav1.FormatLabelSelector(deployment.Spec.Selector)
-			pods, err = clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-				LabelSelector: labelSelector,
-			})
-			if err != nil {
-				return dm, fmt.Errorf("error listing pods with deployment selector: %w", err)
-			}
-		}
 	}
 
 	// Calculate requests from pod specs
@@ -217,16 +215,16 @@ func getDeploymentMetrics(ctx context.Context, clientset *kubernetes.Clientset, 
 	if err == nil {
 		for _, hpa := range hpaList.Items {
 			if hpa.Spec.ScaleTargetRef.Name == name && hpa.Spec.ScaleTargetRef.Kind == "Deployment" {
-				dm.HPAMaxReplicas = hpa.Spec.MaxReplicas
+				dm.MaxReplicas = hpa.Spec.MaxReplicas
 				// Calculate max requests based on HPA max replicas
-				if dm.HPAMaxReplicas > 0 && len(pods.Items) > 0 {
+				if dm.MaxReplicas > dm.DesiredReplicas && len(pods.Items) > 0 {
 					// Get requests per pod (average from current pods)
 					requestsPerPod := ResourceMetrics{
 						CPU:    dm.Requests.CPU / int64(len(pods.Items)),
 						Memory: dm.Requests.Memory / int64(len(pods.Items)),
 					}
-					dm.MaxRequests.CPU = requestsPerPod.CPU * int64(dm.HPAMaxReplicas)
-					dm.MaxRequests.Memory = requestsPerPod.Memory * int64(dm.HPAMaxReplicas)
+					dm.MaxRequests.CPU = requestsPerPod.CPU * int64(dm.MaxReplicas)
+					dm.MaxRequests.Memory = requestsPerPod.Memory * int64(dm.MaxReplicas)
 				}
 				break
 			}
@@ -242,13 +240,22 @@ func printResults(deployments []DeploymentMetrics, outputType string) {
 		return
 	}
 
-	fmt.Printf("%-30s %-15s %-15s %-15s\n", "DEPLOYMENT", "NAMESPACE", "CPU", "MEMORY")
-	fmt.Println("================================================================================")
+	fmt.Printf("%-30s %-15s %-12s %-15s %-15s\n", "DEPLOYMENT", "NAMESPACE", "REPLICAS", "CPU", "MEMORY")
+	fmt.Println("==========================================================================================")
 
 	var totalCPU, totalMemory int64
 
 	for _, dm := range deployments {
-		var cpu, memory string
+		var cpu, memory, replicas string
+
+		switch outputType {
+		case OutputTypeUsage, OutputTypeRequests:
+			// Show current/max replicas
+			replicas = fmt.Sprintf("%d/%d", dm.CurrentReplicas, dm.MaxReplicas)
+		case OutputTypeMaxRequests:
+			// Show only max replicas
+			replicas = fmt.Sprintf("%d", dm.MaxReplicas)
+		}
 
 		switch outputType {
 		case OutputTypeUsage:
@@ -262,7 +269,8 @@ func printResults(deployments []DeploymentMetrics, outputType string) {
 			totalCPU += dm.Requests.CPU
 			totalMemory += dm.Requests.Memory
 		case OutputTypeMaxRequests:
-			if dm.HPAMaxReplicas > 0 {
+			if dm.MaxReplicas > dm.DesiredReplicas {
+				// Has HPA, use max requests
 				cpu = formatCPU(dm.MaxRequests.CPU)
 				memory = formatMemory(dm.MaxRequests.Memory)
 				totalCPU += dm.MaxRequests.CPU
@@ -276,12 +284,12 @@ func printResults(deployments []DeploymentMetrics, outputType string) {
 			}
 		}
 
-		fmt.Printf("%-30s %-15s %-15s %-15s\n", dm.Name, dm.Namespace, cpu, memory)
+		fmt.Printf("%-30s %-15s %-12s %-15s %-15s\n", dm.Name, dm.Namespace, replicas, cpu, memory)
 	}
 
 	// Print totals row
-	fmt.Println("================================================================================")
-	fmt.Printf("%-30s %-15s %-15s %-15s\n", "TOTAL", "", formatCPU(totalCPU), formatMemory(totalMemory))
+	fmt.Println("==========================================================================================")
+	fmt.Printf("%-30s %-15s %-12s %-15s %-15s\n", "TOTAL", "", "", formatCPU(totalCPU), formatMemory(totalMemory))
 }
 
 func formatCPU(milliCores int64) string {

@@ -106,6 +106,17 @@ Shows the total CPU and memory requests if the deployment were scaled to the max
 ./k8s-resource-cli -output max-requests
 ```
 
+### Replicas Column
+
+The `REPLICAS` column shows different information based on the output type:
+
+- **`usage` and `requests`**: Shows `current/max` format (e.g., `2/5`)
+  - `current`: Number of pods currently running (from deployment status)
+  - `max`: Maximum replicas from HPA, or desired replicas if no HPA exists
+
+- **`max-requests`**: Shows only the maximum replicas (e.g., `5`)
+  - This is the HPA max replicas if configured, otherwise the deployment's desired replicas
+
 ## Examples
 
 ### Example 1: View current usage for all deployments
@@ -116,13 +127,13 @@ Shows the total CPU and memory requests if the deployment were scaled to the max
 
 Output:
 ```
-DEPLOYMENT                     NAMESPACE       CPU             MEMORY
-================================================================================
-web-frontend                   production      1.50 cores      2.50 GB
-api-backend                    production      3.20 cores      4.00 GB
-worker                         production      800m            1.20 GB
-================================================================================
-TOTAL                                          5.50 cores      7.70 GB
+DEPLOYMENT                     NAMESPACE       REPLICAS     CPU             MEMORY
+==========================================================================================
+web-frontend                   production      2/5          1.50 cores      2.50 GB
+api-backend                    production      3/10         3.20 cores      4.00 GB
+worker                         production      1/1          800m            1.20 GB
+==========================================================================================
+TOTAL                                                       5.50 cores      7.70 GB
 ```
 
 ### Example 2: View resource requests for a specific deployment
@@ -133,11 +144,11 @@ TOTAL                                          5.50 cores      7.70 GB
 
 Output:
 ```
-DEPLOYMENT                     NAMESPACE       CPU             MEMORY
-================================================================================
-web-frontend                   production      2.00 cores      4.00 GB
-================================================================================
-TOTAL                                          2.00 cores      4.00 GB
+DEPLOYMENT                     NAMESPACE       REPLICAS     CPU             MEMORY
+==========================================================================================
+web-frontend                   production      2/5          2.00 cores      4.00 GB
+==========================================================================================
+TOTAL                                                       2.00 cores      4.00 GB
 ```
 
 ### Example 3: View max requests based on HPA
@@ -148,15 +159,15 @@ TOTAL                                          2.00 cores      4.00 GB
 
 Output:
 ```
-DEPLOYMENT                     NAMESPACE       CPU             MEMORY
-================================================================================
-web-frontend                   production      10.00 cores     20.00 GB
-api-backend                    production      3.20 cores      4.00 GB
-================================================================================
-TOTAL                                          13.20 cores     24.00 GB
+DEPLOYMENT                     NAMESPACE       REPLICAS     CPU             MEMORY
+==========================================================================================
+web-frontend                   production      10           10.00 cores     20.00 GB
+api-backend                    production      3            3.20 cores      4.00 GB
+==========================================================================================
+TOTAL                                                       13.20 cores     24.00 GB
 ```
 
-Note: `web-frontend` has an HPA with max replicas configured, showing scaled-up resources. `api-backend` has no HPA, so it shows current resource requests.
+Note: `web-frontend` has an HPA with max replicas of 10, showing scaled-up resources. `api-backend` has no HPA, so it shows current resource requests with max replicas being the desired replicas (3).
 
 ## How It Works
 
