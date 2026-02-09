@@ -28,6 +28,7 @@ func New(
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.RealIP)
+	r.Use(RequestLogger(logger))
 	r.Use(BasicAuth(cfg.Server.Auth))
 
 	// OPDS routes.

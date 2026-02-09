@@ -62,6 +62,12 @@ func NewHandler(
 
 // HandleRoot serves the aggregator's navigation root — one entry per source feed.
 func (h *Handler) HandleRoot(w http.ResponseWriter, r *http.Request) {
+	h.logger.Debug("HandleRoot request",
+		"method", r.Method,
+		"path", r.URL.Path,
+		"remoteAddr", r.RemoteAddr,
+		"userAgent", r.UserAgent(),
+	)
 	now := time.Now().UTC().Format(time.RFC3339)
 	feed := &opds.Feed{
 		ID:      "urn:opds-aggregator:root",

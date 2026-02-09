@@ -2,10 +2,27 @@ package server
 
 import (
 	"crypto/subtle"
+	"log/slog"
 	"net/http"
 
 	"github.com/madeddie/opds-aggregator/config"
 )
+
+// RequestLogger returns middleware that logs all incoming requests at debug level.
+func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			logger.Debug("incoming request",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"query", r.URL.RawQuery,
+				"remoteAddr", r.RemoteAddr,
+				"userAgent", r.UserAgent(),
+			)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
 
 // BasicAuth returns middleware that enforces HTTP Basic Auth.
 // If auth is nil, the middleware is a no-op passthrough.
