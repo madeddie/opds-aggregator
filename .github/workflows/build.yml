@@ -1,6 +1,8 @@
 name: Build
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -38,3 +40,48 @@ jobs:
         with:
           name: opds-aggregator-${{ matrix.goos }}-${{ matrix.goarch }}
           path: opds-aggregator-${{ matrix.goos }}-${{ matrix.goarch }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          for dir in artifacts/*/; do
+            name=$(basename "$dir")
+            cp "$dir/$name" "release/$name"
+          done
+
+      - name: Generate version
+        id: version
+        run: |
+          VERSION="v$(date +'%Y%m%d')-${GITHUB_SHA::7}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          body: |
+            Automated release from commit ${{ github.sha }}
+
+            ## Downloads
+            - `opds-aggregator-linux-amd64` - Linux x86_64
+            - `opds-aggregator-linux-arm64` - Linux ARM64
+            - `opds-aggregator-darwin-amd64` - macOS Intel
+            - `opds-aggregator-darwin-arm64` - macOS Apple Silicon
+          files: release/*
+          generate_release_notes: true
