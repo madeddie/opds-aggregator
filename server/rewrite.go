@@ -90,8 +90,14 @@ func makeRelativePath(base, full string) string {
 		return "ext?url=" + url.QueryEscape(full)
 	}
 
-	rel := strings.TrimPrefix(fullURL.Path, baseURL.Path)
-	rel = strings.TrimPrefix(rel, "/")
+	// Normalize the base path to always end with / for prefix stripping.
+	basePath := strings.TrimSuffix(baseURL.Path, "/") + "/"
+	rel := strings.TrimPrefix(fullURL.Path, basePath)
+	// Also handle the case where fullURL.Path equals baseURL.Path exactly.
+	if rel == fullURL.Path {
+		rel = strings.TrimPrefix(fullURL.Path, strings.TrimSuffix(baseURL.Path, "/"))
+		rel = strings.TrimPrefix(rel, "/")
+	}
 	if fullURL.RawQuery != "" {
 		rel += "?" + fullURL.RawQuery
 	}
@@ -110,5 +116,22 @@ func resolveURL(base, ref string) string {
 	if err != nil {
 		return ref
 	}
+	// Ensure the base path is treated as a directory so relative refs append
+	// instead of replacing the last segment (e.g., /opds + "foo" → /opds/foo).
+	if !strings.HasSuffix(baseURL.Path, "/") {
+		baseURL.Path += "/"
+	}
 	return baseURL.ResolveReference(refURL).String()
+}
+
+// joinURL reconstructs an upstream URL by joining a base URL with a relative
+// sub-path and optional query string. Unlike resolveURL, this uses simple
+// string concatenation which is correct for round-tripping paths created by
+// makeRelativePath.
+func joinURL(base, subPath, rawQuery string) string {
+	u := strings.TrimSuffix(base, "/") + "/" + strings.TrimPrefix(subPath, "/")
+	if rawQuery != "" {
+		u += "?" + rawQuery
+	}
+	return u
 }
