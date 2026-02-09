@@ -50,11 +50,6 @@ server:
 polling:
   interval: "6h"
 
-download:
-  cache_enabled: true
-  cache_dir: "/var/cache/opds-aggregator"
-  max_cache_size: "10GB"
-
 feeds:
   - name: "Project Gutenberg"
     url: "https://m.gutenberg.org/ebooks.opds/"
@@ -80,8 +75,6 @@ feeds:
 | `server.title` | Root catalog title | `OPDS Aggregator` |
 | `server.auth` | Basic Auth credentials for the aggregator (omit to disable) | — |
 | `polling.interval` | How often to re-crawl upstream feeds (Go duration) | `6h` |
-| `download.cache_enabled` | Cache proxied downloads to disk | `false` |
-| `download.cache_dir` | Directory for cached downloads | system temp dir |
 | `feeds[].name` | Display name for the source | required |
 | `feeds[].url` | OPDS catalog root URL | required |
 | `feeds[].auth` | Basic Auth credentials for this upstream | — |
