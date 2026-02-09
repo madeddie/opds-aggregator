@@ -58,8 +58,8 @@ func (s *Searcher) Search(ctx context.Context, query string) (*opds.Feed, error)
 		Title:   fmt.Sprintf("Search results for %q", query),
 		Updated: time.Now().UTC().Format(time.RFC3339),
 		Links: []opds.Link{
-			{Rel: opds.RelSelf, Href: "/opds/search?q=" + url.QueryEscape(query), Type: opds.MediaTypeOPDSAcq},
-			{Rel: opds.RelStart, Href: "/opds", Type: opds.MediaTypeOPDSNav},
+			{Rel: opds.RelSelf, Href: "/opds/search?q=" + url.QueryEscape(query), Type: opds.MediaTypeAtom},
+			{Rel: opds.RelStart, Href: "/opds", Type: opds.MediaTypeAtom},
 		},
 	}
 

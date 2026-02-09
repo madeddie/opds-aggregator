@@ -68,8 +68,8 @@ func (h *Handler) HandleRoot(w http.ResponseWriter, r *http.Request) {
 		Title:   h.cfg.Server.Title,
 		Updated: now,
 		Links: []opds.Link{
-			{Rel: opds.RelSelf, Href: "/opds", Type: opds.MediaTypeOPDSNav},
-			{Rel: opds.RelStart, Href: "/opds", Type: opds.MediaTypeOPDSNav},
+			{Rel: opds.RelSelf, Href: "/opds", Type: opds.MediaTypeAtom},
+			{Rel: opds.RelStart, Href: "/opds", Type: opds.MediaTypeAtom},
 		},
 	}
 
@@ -77,7 +77,7 @@ func (h *Handler) HandleRoot(w http.ResponseWriter, r *http.Request) {
 	feed.Links = append(feed.Links, opds.Link{
 		Rel:  opds.RelSearch,
 		Href: "/opds/search?q={searchTerms}",
-		Type: opds.MediaTypeOPDSAcq,
+		Type: opds.MediaTypeAtom,
 	})
 
 	for _, fc := range h.cfg.Feeds {
@@ -95,7 +95,7 @@ func (h *Handler) HandleRoot(w http.ResponseWriter, r *http.Request) {
 				{
 					Rel:  opds.RelSubsection,
 					Href: "/opds/source/" + slug + "/",
-					Type: opds.MediaTypeOPDSNav,
+					Type: opds.MediaTypeAtom,
 				},
 			},
 		}
