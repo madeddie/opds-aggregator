@@ -18,12 +18,11 @@ import (
 func New(
 	cfg *config.Config,
 	feedCache *cache.FeedCache,
-	dlCache *cache.DownloadCache,
 	crawl *crawler.Crawler,
 	searcher *search.Searcher,
 	logger *slog.Logger,
 ) *http.Server {
-	h := NewHandler(cfg, feedCache, dlCache, crawl, searcher, logger)
+	h := NewHandler(cfg, feedCache, crawl, searcher, logger)
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Recoverer)

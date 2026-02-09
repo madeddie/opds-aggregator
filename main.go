@@ -51,13 +51,6 @@ func main() {
 	httpClient := &http.Client{Timeout: 60 * time.Second}
 	crawl := crawler.New(httpClient, logger)
 	feedCache := cache.NewFeedCache(logger)
-
-	dlCache, err := cache.NewDownloadCache(cfg.Download.CacheDir, cfg.Download.CacheEnabled, logger)
-	if err != nil {
-		logger.Error("failed to initialize download cache", "error", err)
-		os.Exit(1)
-	}
-
 	searcher := search.New(cfg, feedCache, crawl, logger)
 
 	// Build refresh function.
@@ -66,7 +59,7 @@ func main() {
 	}
 
 	// Create HTTP server.
-	srv := server.New(cfg, feedCache, dlCache, crawl, searcher, logger)
+	srv := server.New(cfg, feedCache, crawl, searcher, logger)
 
 	// Set the refresh function on the handler (need to get it through the server).
 	// We'll do initial poll, then set up the ticker.

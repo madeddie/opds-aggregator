@@ -12,10 +12,9 @@ import (
 
 // Config is the top-level configuration.
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Polling  PollingConfig  `yaml:"polling"`
-	Feeds    []FeedConfig   `yaml:"feeds"`
-	Download DownloadConfig `yaml:"download"`
+	Server  ServerConfig  `yaml:"server"`
+	Polling PollingConfig `yaml:"polling"`
+	Feeds   []FeedConfig  `yaml:"feeds"`
 }
 
 // ServerConfig configures the HTTP server.
@@ -46,13 +45,6 @@ func (p PollingConfig) ParsedInterval() (time.Duration, error) {
 		return 0, fmt.Errorf("config: invalid polling interval %q: %w", p.Interval, err)
 	}
 	return d, nil
-}
-
-// DownloadConfig controls download proxying and caching.
-type DownloadConfig struct {
-	CacheEnabled bool   `yaml:"cache_enabled"`
-	CacheDir     string `yaml:"cache_dir"`
-	MaxCacheSize string `yaml:"max_cache_size"` // e.g., "10GB"
 }
 
 // FeedConfig describes a single upstream OPDS feed.
@@ -113,9 +105,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Polling.Interval == "" {
 		c.Polling.Interval = "6h"
-	}
-	if c.Download.CacheDir == "" {
-		c.Download.CacheDir = filepath.Join(os.TempDir(), "opds-aggregator-cache")
 	}
 }
 

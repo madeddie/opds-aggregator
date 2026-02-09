@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -24,7 +23,6 @@ import (
 type Handler struct {
 	cfg       *config.Config
 	feedCache *cache.FeedCache
-	dlCache   *cache.DownloadCache
 	crawler   *crawler.Crawler
 	searcher  *search.Searcher
 	logger    *slog.Logger
@@ -40,7 +38,6 @@ type Handler struct {
 func NewHandler(
 	cfg *config.Config,
 	feedCache *cache.FeedCache,
-	dlCache *cache.DownloadCache,
 	crawl *crawler.Crawler,
 	searcher *search.Searcher,
 	logger *slog.Logger,
@@ -52,7 +49,6 @@ func NewHandler(
 	return &Handler{
 		cfg:       cfg,
 		feedCache: feedCache,
-		dlCache:   dlCache,
 		crawler:   crawl,
 		searcher:  searcher,
 		logger:    logger,
@@ -186,17 +182,6 @@ func (h *Handler) HandleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check download cache first.
-	if f, meta, err := h.dlCache.Get(dlURL); err == nil && f != nil {
-		defer f.Close()
-		h.logger.Debug("serving cached download", "url", dlURL)
-		if meta != nil && meta.ContentType != "" {
-			w.Header().Set("Content-Type", meta.ContentType)
-		}
-		io.Copy(w, f)
-		return
-	}
-
 	// Fetch from upstream.
 	body, contentType, contentLength, err := h.crawler.FetchRaw(r.Context(), dlURL, feedCfg.Auth)
 	if err != nil {
@@ -211,19 +196,6 @@ func (h *Handler) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	if contentLength > 0 {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", contentLength))
-	}
-
-	// If caching is enabled, tee the body to both the response and the cache.
-	if h.dlCache != nil {
-		var buf bytes.Buffer
-		tee := io.TeeReader(body, &buf)
-		io.Copy(w, tee)
-		go func() {
-			if err := h.dlCache.Put(dlURL, contentType, &buf); err != nil {
-				h.logger.Warn("failed to cache download", "url", dlURL, "error", err)
-			}
-		}()
-		return
 	}
 
 	io.Copy(w, body)
