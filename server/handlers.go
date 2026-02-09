@@ -117,6 +117,7 @@ func (h *Handler) HandleSource(w http.ResponseWriter, r *http.Request) {
 	// The remainder of the path after /opds/source/{slug}/
 	subPath := chi.URLParam(r, "*")
 	rawQuery := r.URL.RawQuery
+	h.logger.Debug("HandleSource request", "slug", slug, "subPath", subPath, "rawQuery", rawQuery, "fullPath", r.URL.Path)
 
 	cached, hasCached := h.feedCache.Get(slug)
 	if !hasCached {
@@ -141,7 +142,15 @@ func (h *Handler) HandleSource(w http.ResponseWriter, r *http.Request) {
 
 	// Determine the upstream base URL for this sub-feed.
 	baseURL := cached.Tree.URL
-	if subPath != "" {
+	trimmedSub := strings.TrimPrefix(strings.TrimSuffix(subPath, "/"), "/")
+	if trimmedSub == "ext" {
+		// External URL — use it as the base for link resolution.
+		if qv, err := url.ParseQuery(rawQuery); err == nil {
+			if extURL := qv.Get("url"); extURL != "" {
+				baseURL = extURL
+			}
+		}
+	} else if subPath != "" {
 		baseURL = joinURL(cached.Tree.URL, subPath, "")
 	}
 
@@ -238,6 +247,10 @@ func (h *Handler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleSourceSearch handles search within a specific source.
+// When called without a "q" parameter but with "upstream", it serves an
+// OpenSearch description document so that OPDS readers can discover the
+// search endpoint. This avoids returning 400 when readers auto-fetch the
+// search link to discover search capabilities.
 func (h *Handler) HandleSourceSearch(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")
 	feedCfg, ok := h.feedMap[slug]
@@ -249,8 +262,22 @@ func (h *Handler) HandleSourceSearch(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	upstreamSearch := r.URL.Query().Get("upstream")
 
-	if query == "" || upstreamSearch == "" {
-		http.Error(w, "missing q or upstream parameter", http.StatusBadRequest)
+	if upstreamSearch == "" {
+		http.Error(w, "missing upstream parameter", http.StatusBadRequest)
+		return
+	}
+
+	// No query yet — the reader is fetching the search description.
+	// Serve a generated OpenSearch description pointing back to this endpoint.
+	if query == "" {
+		w.Header().Set("Content-Type", "application/opensearchdescription+xml; charset=utf-8")
+		tmpl := "/opds/search/" + slug + "?upstream=" + url.QueryEscape(upstreamSearch) + "&amp;q={searchTerms}"
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+<OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
+  <ShortName>%s</ShortName>
+  <Description>Search %s</Description>
+  <Url type="application/atom+xml;profile=opds-catalog" template="%s"/>
+</OpenSearchDescription>`, feedCfg.Name, feedCfg.Name, tmpl)
 		return
 	}
 
@@ -320,6 +347,31 @@ func (h *Handler) resolveFeed(ctx context.Context, tree *crawler.FeedTree, feedC
 	// Check if we have this child in the cached tree.
 	if child, ok := tree.Children[cacheKey]; ok {
 		return child.Feed
+	}
+
+	// Handle external URL references (produced by makeRelativePath for
+	// cross-host links or links outside the source root path).
+	if subPath == "ext" {
+		if qv, err := url.ParseQuery(rawQuery); err == nil {
+			if extURL := qv.Get("url"); extURL != "" {
+				cacheKey = "ext?url=" + url.QueryEscape(extURL)
+				if child, ok := tree.Children[cacheKey]; ok {
+					return child.Feed
+				}
+				h.logger.Info("on-demand ext fetch", "url", extURL)
+				feed, err := h.crawler.FetchPaginated(ctx, extURL, feedCfg.Auth)
+				if err != nil {
+					h.logger.Error("on-demand ext fetch failed", "url", extURL, "error", err)
+					return nil
+				}
+				tree.Children[cacheKey] = &crawler.FeedTree{
+					Feed:     feed,
+					URL:      extURL,
+					Children: make(map[string]*crawler.FeedTree),
+				}
+				return feed
+			}
+		}
 	}
 
 	// Not in cache — fetch on demand from upstream.

@@ -21,9 +21,14 @@ import (
 
 func main() {
 	configPath := flag.String("config", "", "path to config.yaml (default: auto-detect)")
+	debug := flag.Bool("debug", false, "enable debug logging")
 	flag.Parse()
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logLevel := slog.LevelInfo
+	if *debug {
+		logLevel = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
 
 	// Find config file.
 	cfgPath := *configPath
