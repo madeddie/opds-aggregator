@@ -116,6 +116,7 @@ func (h *Handler) HandleSource(w http.ResponseWriter, r *http.Request) {
 
 	// The remainder of the path after /opds/source/{slug}/
 	subPath := chi.URLParam(r, "*")
+	rawQuery := r.URL.RawQuery
 
 	cached, hasCached := h.feedCache.Get(slug)
 	if !hasCached {
@@ -132,7 +133,7 @@ func (h *Handler) HandleSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Determine which feed in the tree to serve.
-	feed := h.resolveFeed(r.Context(), cached.Tree, feedCfg, subPath)
+	feed := h.resolveFeed(r.Context(), cached.Tree, feedCfg, subPath, rawQuery)
 	if feed == nil {
 		http.Error(w, "feed not found", http.StatusNotFound)
 		return
@@ -141,7 +142,7 @@ func (h *Handler) HandleSource(w http.ResponseWriter, r *http.Request) {
 	// Determine the upstream base URL for this sub-feed.
 	baseURL := cached.Tree.URL
 	if subPath != "" {
-		baseURL = resolveURL(cached.Tree.URL, subPath)
+		baseURL = joinURL(cached.Tree.URL, subPath, "")
 	}
 
 	rewritten := rewriteFeedLinks(feed, slug, baseURL, "")
@@ -301,22 +302,28 @@ func (h *Handler) HandleRefreshAll(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveFeed finds the right feed to serve from the cached tree, given the sub-path.
-func (h *Handler) resolveFeed(ctx context.Context, tree *crawler.FeedTree, feedCfg config.FeedConfig, subPath string) *opds.Feed {
+func (h *Handler) resolveFeed(ctx context.Context, tree *crawler.FeedTree, feedCfg config.FeedConfig, subPath, rawQuery string) *opds.Feed {
 	subPath = strings.TrimPrefix(subPath, "/")
 	subPath = strings.TrimSuffix(subPath, "/")
 
 	// Root of this source.
-	if subPath == "" {
+	if subPath == "" && rawQuery == "" {
 		return tree.Feed
 	}
 
+	// Build a cache key that includes query params.
+	cacheKey := subPath
+	if rawQuery != "" {
+		cacheKey += "?" + rawQuery
+	}
+
 	// Check if we have this child in the cached tree.
-	if child, ok := tree.Children[subPath]; ok {
+	if child, ok := tree.Children[cacheKey]; ok {
 		return child.Feed
 	}
 
 	// Not in cache — fetch on demand from upstream.
-	upstreamURL := resolveURL(tree.URL, subPath)
+	upstreamURL := joinURL(tree.URL, subPath, rawQuery)
 	h.logger.Info("on-demand sub-feed fetch", "url", upstreamURL)
 
 	feed, err := h.crawler.FetchPaginated(ctx, upstreamURL, feedCfg.Auth)
@@ -326,7 +333,7 @@ func (h *Handler) resolveFeed(ctx context.Context, tree *crawler.FeedTree, feedC
 	}
 
 	// Cache the result for future requests.
-	tree.Children[subPath] = &crawler.FeedTree{
+	tree.Children[cacheKey] = &crawler.FeedTree{
 		Feed:     feed,
 		URL:      upstreamURL,
 		Children: make(map[string]*crawler.FeedTree),

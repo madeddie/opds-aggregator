@@ -225,6 +225,11 @@ func resolveURL(base, ref string) string {
 	if err != nil {
 		return ref
 	}
+	// Ensure the base path is treated as a directory so relative refs append
+	// instead of replacing the last segment (e.g., /opds + "foo" → /opds/foo).
+	if !strings.HasSuffix(baseURL.Path, "/") {
+		baseURL.Path += "/"
+	}
 	return baseURL.ResolveReference(refURL).String()
 }
 
