@@ -10,31 +10,31 @@ import (
 // rewriteFeedLinks rewrites all links in a feed to go through the aggregator proxy.
 // Navigation links become /opds/source/{slug}/... paths.
 // Acquisition/image links become /opds/download/{slug}?url=... for proxying.
-func rewriteFeedLinks(feed *opds.Feed, slug, baseUpstreamURL, proxyPrefix string) *opds.Feed {
+func rewriteFeedLinks(feed *opds.Feed, slug, baseUpstreamURL, sourceRootURL, proxyPrefix string) *opds.Feed {
 	// Deep copy to avoid mutating the cache.
 	out := *feed
-	out.Links = rewriteLinks(feed.Links, slug, baseUpstreamURL, proxyPrefix)
+	out.Links = rewriteLinks(feed.Links, slug, baseUpstreamURL, sourceRootURL, proxyPrefix)
 	out.Entries = make([]opds.Entry, len(feed.Entries))
 	for i, e := range feed.Entries {
 		out.Entries[i] = e
-		out.Entries[i].Links = rewriteLinks(e.Links, slug, baseUpstreamURL, proxyPrefix)
+		out.Entries[i].Links = rewriteLinks(e.Links, slug, baseUpstreamURL, sourceRootURL, proxyPrefix)
 	}
 	return &out
 }
 
-func rewriteLinks(links []opds.Link, slug, baseUpstreamURL, proxyPrefix string) []opds.Link {
+func rewriteLinks(links []opds.Link, slug, baseUpstreamURL, sourceRootURL, proxyPrefix string) []opds.Link {
 	if len(links) == 0 {
 		return nil
 	}
 	out := make([]opds.Link, len(links))
 	for i, l := range links {
 		out[i] = l
-		out[i].Href = rewriteHref(l, slug, baseUpstreamURL, proxyPrefix)
+		out[i].Href = rewriteHref(l, slug, baseUpstreamURL, sourceRootURL, proxyPrefix)
 	}
 	return out
 }
 
-func rewriteHref(l opds.Link, slug, baseUpstreamURL, proxyPrefix string) string {
+func rewriteHref(l opds.Link, slug, baseUpstreamURL, sourceRootURL, proxyPrefix string) string {
 	href := resolveURL(baseUpstreamURL, l.Href)
 
 	// Acquisition and image links get proxied through the download endpoint.
@@ -42,15 +42,19 @@ func rewriteHref(l opds.Link, slug, baseUpstreamURL, proxyPrefix string) string 
 		return proxyPrefix + "/opds/download/" + slug + "?url=" + url.QueryEscape(href)
 	}
 
-	// Navigation-type links get rewritten to /opds/source/{slug}/...
-	if isOPDSFeedType(l.Type) || opds.IsNavigationRel(l.Rel) {
-		relPath := makeRelativePath(baseUpstreamURL, href)
-		return proxyPrefix + "/opds/source/" + slug + "/" + relPath
-	}
-
-	// Search links.
+	// Search links — check before navigation type to avoid misclassifying
+	// search templates that have an OPDS feed type (e.g. application/atom+xml).
 	if l.Rel == opds.RelSearch {
 		return proxyPrefix + "/opds/search/" + slug + "?upstream=" + url.QueryEscape(href)
+	}
+
+	// Navigation-type links get rewritten to /opds/source/{slug}/...
+	// Use sourceRootURL for makeRelativePath so that paths are relative to the
+	// source root, matching what resolveFeed/joinURL expects when reconstructing
+	// upstream URLs.
+	if isOPDSFeedType(l.Type) || opds.IsNavigationRel(l.Rel) {
+		relPath := makeRelativePath(sourceRootURL, href)
+		return proxyPrefix + "/opds/source/" + slug + "/" + relPath
 	}
 
 	// Everything else (external links, etc.) gets proxied as a download.

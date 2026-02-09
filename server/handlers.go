@@ -145,7 +145,7 @@ func (h *Handler) HandleSource(w http.ResponseWriter, r *http.Request) {
 		baseURL = joinURL(cached.Tree.URL, subPath, "")
 	}
 
-	rewritten := rewriteFeedLinks(feed, slug, baseURL, "")
+	rewritten := rewriteFeedLinks(feed, slug, baseURL, cached.Tree.URL, "")
 	writeOPDS(w, rewritten, h.logger)
 }
 
@@ -266,7 +266,7 @@ func (h *Handler) HandleSourceSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rewritten := rewriteFeedLinks(results, slug, feedCfg.URL, "")
+	rewritten := rewriteFeedLinks(results, slug, feedCfg.URL, feedCfg.URL, "")
 	writeOPDS(w, rewritten, h.logger)
 }
 
