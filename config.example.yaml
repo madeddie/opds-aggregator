@@ -1,0 +1,30 @@
+server:
+  addr: ":8080"
+  title: "OPDS Aggregator"
+  auth:
+    username: "reader"
+    password: "changeme"
+
+polling:
+  interval: "6h"
+
+download:
+  cache_enabled: true
+  cache_dir: "/var/cache/opds-aggregator"
+  max_cache_size: "10GB"
+
+feeds:
+  - name: "Project Gutenberg"
+    url: "https://m.gutenberg.org/ebooks.opds/"
+    poll_depth: 0
+
+  - name: "Standard Ebooks"
+    url: "https://standardebooks.org/feeds/opds"
+    poll_depth: 1
+
+  - name: "My Calibre Library"
+    url: "https://mycalibre.example.com/opds"
+    auth:
+      username: "user"
+      password: "secret"
+    poll_depth: 2
