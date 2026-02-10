@@ -5,7 +5,7 @@ A single-binary Go server that combines multiple OPDS 1.2 catalogs into one unif
 ## Features
 
 - **Unified catalog** — each upstream feed appears as a top-level entry, with its full structure preserved underneath
-- **Download proxying** — all acquisitions (book downloads, cover images) are proxied through the aggregator, with optional disk caching
+- **Download proxying** — all acquisitions (book downloads, cover images) are proxied through the aggregator
 - **Basic Auth** — protect the aggregator with a username/password; per-source upstream credentials supported
 - **Periodic polling** — configurable automatic refresh of upstream feeds, plus a manual refresh endpoint
 - **Search** — fan-out proxy search across upstream OpenSearch endpoints, merged into a single result feed
@@ -82,6 +82,31 @@ feeds:
 
 **poll_depth tip**: Use `0` for large catalogs like Gutenberg (sub-feeds are fetched on demand). Use `1`–`2` for small personal libraries to pre-populate the cache.
 
+### Environment variables
+
+All settings can be configured via environment variables, which override YAML values. If no config file is found, the application runs entirely from environment variables.
+
+| Variable | Description |
+|----------|-------------|
+| `OPDS_SERVER_ADDR` | Listen address (e.g., `:8080`) |
+| `OPDS_SERVER_TITLE` | Root catalog title |
+| `OPDS_AUTH_USERNAME` | Basic Auth username |
+| `OPDS_AUTH_PASSWORD` | Basic Auth password |
+| `OPDS_POLLING_INTERVAL` | Refresh interval (Go duration, e.g., `6h`) |
+| `OPDS_DEBUG` | Set to `true` for debug logging |
+
+Feeds are configured with indexed variables:
+
+| Variable | Description |
+|----------|-------------|
+| `OPDS_FEED_0_NAME` | First feed's display name |
+| `OPDS_FEED_0_URL` | First feed's OPDS URL |
+| `OPDS_FEED_0_POLL_DEPTH` | First feed's crawl depth |
+| `OPDS_FEED_0_AUTH_USERNAME` | First feed's upstream auth username |
+| `OPDS_FEED_0_AUTH_PASSWORD` | First feed's upstream auth password |
+
+Increment the index for additional feeds (`OPDS_FEED_1_*`, `OPDS_FEED_2_*`, etc.). If any `OPDS_FEED_*` variables are set, they replace all YAML-defined feeds.
+
 ## Running
 
 ```sh
@@ -93,6 +118,49 @@ feeds:
 ```
 
 The server performs an initial crawl of all feeds on startup, then polls at the configured interval.
+
+## Docker
+
+Container images are published to GitHub Container Registry for `linux/amd64` and `linux/arm64`.
+
+```sh
+# Pull the latest image
+docker pull ghcr.io/madeddie/opds-aggregator:latest
+
+# Run with a config file
+docker run -d \
+  -p 8080:8080 \
+  -v /path/to/config.yaml:/config.yaml:ro \
+  ghcr.io/madeddie/opds-aggregator --config /config.yaml
+
+# Run with environment variables only
+docker run -d \
+  -p 8080:8080 \
+  -e OPDS_AUTH_USERNAME=reader \
+  -e OPDS_AUTH_PASSWORD=secret \
+  -e OPDS_FEED_0_NAME="Standard Ebooks" \
+  -e OPDS_FEED_0_URL="https://standardebooks.org/feeds/opds" \
+  -e OPDS_FEED_0_POLL_DEPTH=1 \
+  ghcr.io/madeddie/opds-aggregator
+```
+
+### Docker Compose
+
+```yaml
+services:
+  opds-aggregator:
+    image: ghcr.io/madeddie/opds-aggregator:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - OPDS_AUTH_USERNAME=reader
+      - OPDS_AUTH_PASSWORD=changeme
+      - OPDS_POLLING_INTERVAL=6h
+      - OPDS_FEED_0_NAME=Standard Ebooks
+      - OPDS_FEED_0_URL=https://standardebooks.org/feeds/opds
+      - OPDS_FEED_0_POLL_DEPTH=1
+    restart: unless-stopped
+```
 
 ### KOReader setup
 
