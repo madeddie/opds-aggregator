@@ -8,11 +8,6 @@ server:
 polling:
   interval: "6h"
 
-download:
-  cache_enabled: true
-  cache_dir: "/var/cache/opds-aggregator"
-  max_cache_size: "10GB"
-
 feeds:
   - name: "Project Gutenberg"
     url: "https://m.gutenberg.org/ebooks.opds/"
