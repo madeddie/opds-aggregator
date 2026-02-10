@@ -25,27 +25,34 @@ func main() {
 	flag.Parse()
 
 	logLevel := slog.LevelInfo
-	if *debug {
+	if *debug || os.Getenv("OPDS_DEBUG") == "true" {
 		logLevel = slog.LevelDebug
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
 
-	// Find config file.
+	// Load config: try YAML first, fall back to env-only.
 	cfgPath := *configPath
 	if cfgPath == "" {
 		cfgPath = config.FindConfig()
-		if cfgPath == "" {
-			logger.Error("no config file found; use --config flag or create config.yaml")
-			os.Exit(1)
-		}
 	}
 
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		logger.Error("failed to load config", "error", err)
-		os.Exit(1)
+	var cfg *config.Config
+	var err error
+	if cfgPath != "" {
+		cfg, err = config.Load(cfgPath)
+		if err != nil {
+			logger.Error("failed to load config", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("config loaded", "path", cfgPath, "feeds", len(cfg.Feeds))
+	} else {
+		cfg, err = config.LoadFromEnv()
+		if err != nil {
+			logger.Error("failed to load config from environment", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("config loaded from environment variables", "feeds", len(cfg.Feeds))
 	}
-	logger.Info("config loaded", "path", cfgPath, "feeds", len(cfg.Feeds))
 
 	// Initialize components.
 	httpClient := &http.Client{Timeout: 60 * time.Second}
