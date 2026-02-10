@@ -125,12 +125,28 @@ func (c *Crawler) FetchFeedByURL(ctx context.Context, feedURL string, auth *conf
 
 // FetchPaginated fetches a feed and follows all "next" pagination links, merging entries.
 func (c *Crawler) FetchPaginated(ctx context.Context, feedURL string, auth *config.AuthConfig) (*opds.Feed, error) {
+	feed, _, _, err := c.FetchWithLimit(ctx, feedURL, auth, 0)
+	return feed, err
+}
+
+// FetchResult contains the result of a paginated fetch.
+type FetchResult struct {
+	Feed    *opds.Feed
+	HasMore bool   // true if there are more upstream pages
+	NextURL string // URL for the next upstream page (if HasMore)
+}
+
+// FetchWithLimit fetches a feed and follows up to maxPages of "next" pagination links.
+// If maxPages is 0, all pages are followed. Returns the merged feed, whether more
+// pages exist upstream, and the URL for the next page (if any).
+func (c *Crawler) FetchWithLimit(ctx context.Context, feedURL string, auth *config.AuthConfig, maxPages int) (*opds.Feed, bool, string, error) {
 	feed, err := c.fetchFeed(ctx, feedURL, auth)
 	if err != nil {
-		return nil, err
+		return nil, false, "", err
 	}
 
 	current := feed
+	pageCount := 1
 	for {
 		nextLink := current.NextLink()
 		if nextLink == nil {
@@ -138,6 +154,12 @@ func (c *Crawler) FetchPaginated(ctx context.Context, feedURL string, auth *conf
 		}
 
 		nextURL := resolveURL(feedURL, nextLink.Href)
+
+		// If we've reached the page limit, return with hasMore=true and the next URL.
+		if maxPages > 0 && pageCount >= maxPages {
+			return feed, true, nextURL, nil
+		}
+
 		next, err := c.fetchFeed(ctx, nextURL, auth)
 		if err != nil {
 			c.logger.Warn("pagination fetch failed", "url", nextURL, "error", err)
@@ -146,9 +168,10 @@ func (c *Crawler) FetchPaginated(ctx context.Context, feedURL string, auth *conf
 
 		feed.Entries = append(feed.Entries, next.Entries...)
 		current = next
+		pageCount++
 	}
 
-	return feed, nil
+	return feed, false, "", nil
 }
 
 func (c *Crawler) fetchFeed(ctx context.Context, feedURL string, auth *config.AuthConfig) (*opds.Feed, error) {
