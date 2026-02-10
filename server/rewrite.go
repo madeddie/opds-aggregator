@@ -35,6 +35,11 @@ func rewriteLinks(links []opds.Link, slug, baseUpstreamURL, sourceRootURL, proxy
 }
 
 func rewriteHref(l opds.Link, slug, baseUpstreamURL, sourceRootURL, proxyPrefix string) string {
+	// Skip links that are already local aggregator paths (e.g., pagination links).
+	if strings.HasPrefix(l.Href, "/opds/") {
+		return l.Href
+	}
+
 	href := resolveURL(baseUpstreamURL, l.Href)
 
 	// Acquisition and image links get proxied through the download endpoint.

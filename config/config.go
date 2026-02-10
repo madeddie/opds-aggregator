@@ -20,9 +20,10 @@ type Config struct {
 
 // ServerConfig configures the HTTP server.
 type ServerConfig struct {
-	Addr  string      `yaml:"addr"`
-	Title string      `yaml:"title"`
-	Auth  *AuthConfig `yaml:"auth,omitempty"`
+	Addr              string      `yaml:"addr"`
+	Title             string      `yaml:"title"`
+	Auth              *AuthConfig `yaml:"auth,omitempty"`
+	DefaultMaxEntries int         `yaml:"default_max_entries"` // default entries per page (0 = unlimited)
 }
 
 // AuthConfig holds Basic Auth credentials.
@@ -50,10 +51,12 @@ func (p PollingConfig) ParsedInterval() (time.Duration, error) {
 
 // FeedConfig describes a single upstream OPDS feed.
 type FeedConfig struct {
-	Name      string      `yaml:"name"`
-	URL       string      `yaml:"url"`
-	Auth      *AuthConfig `yaml:"auth,omitempty"`
-	PollDepth int         `yaml:"poll_depth"`
+	Name        string      `yaml:"name"`
+	URL         string      `yaml:"url"`
+	Auth        *AuthConfig `yaml:"auth,omitempty"`
+	PollDepth   int         `yaml:"poll_depth"`
+	MaxEntries  int         `yaml:"max_entries"`  // max entries per page (0 = use server default)
+	MaxPaginate int         `yaml:"max_paginate"` // max upstream pages to follow (0 = all)
 }
 
 // Slug returns a URL-safe identifier for the feed.
@@ -121,6 +124,11 @@ func (c *Config) ApplyEnv() {
 	if v := os.Getenv("OPDS_SERVER_TITLE"); v != "" {
 		c.Server.Title = v
 	}
+	if v := os.Getenv("OPDS_SERVER_DEFAULT_MAX_ENTRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Server.DefaultMaxEntries = n
+		}
+	}
 	if v := os.Getenv("OPDS_POLLING_INTERVAL"); v != "" {
 		c.Polling.Interval = v
 	}
@@ -155,6 +163,16 @@ func feedsFromEnv() []FeedConfig {
 		if v := os.Getenv(prefix + "POLL_DEPTH"); v != "" {
 			if depth, err := strconv.Atoi(v); err == nil {
 				fc.PollDepth = depth
+			}
+		}
+		if v := os.Getenv(prefix + "MAX_ENTRIES"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				fc.MaxEntries = n
+			}
+		}
+		if v := os.Getenv(prefix + "MAX_PAGINATE"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				fc.MaxPaginate = n
 			}
 		}
 		feedUser := os.Getenv(prefix + "AUTH_USERNAME")

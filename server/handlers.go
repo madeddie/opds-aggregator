@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -140,6 +141,15 @@ func (h *Handler) HandleSource(w http.ResponseWriter, r *http.Request) {
 	if feed == nil {
 		http.Error(w, "feed not found", http.StatusNotFound)
 		return
+	}
+
+	// Apply server-side pagination BEFORE link rewriting.
+	// This limits the number of entries we process and return.
+	maxEntries := h.getMaxEntries(feedCfg)
+	if maxEntries > 0 && len(feed.Entries) > 0 {
+		offset, limit := h.parsePaginationParams(r, maxEntries)
+		basePath := "/opds/source/" + slug + "/" + subPath
+		feed = h.paginateFeed(feed, basePath, rawQuery, offset, limit)
 	}
 
 	// Determine the upstream base URL for this sub-feed.
@@ -311,15 +321,20 @@ func (h *Handler) resolveFeed(ctx context.Context, tree *crawler.FeedTree, feedC
 	subPath = strings.TrimPrefix(subPath, "/")
 	subPath = strings.TrimSuffix(subPath, "/")
 
+	// Strip pagination params from the query for cache key and upstream URL.
+	// Our pagination params are "offset" and "limit" — they control local slicing,
+	// not upstream fetching.
+	cleanQuery := stripPaginationParams(rawQuery)
+
 	// Root of this source.
-	if subPath == "" && rawQuery == "" {
+	if subPath == "" && cleanQuery == "" {
 		return tree.Feed
 	}
 
-	// Build a cache key that includes query params.
+	// Build a cache key that includes query params (without pagination).
 	cacheKey := subPath
-	if rawQuery != "" {
-		cacheKey += "?" + rawQuery
+	if cleanQuery != "" {
+		cacheKey += "?" + cleanQuery
 	}
 
 	// Check if we have this child in the cached tree.
@@ -330,14 +345,14 @@ func (h *Handler) resolveFeed(ctx context.Context, tree *crawler.FeedTree, feedC
 	// Handle external URL references (produced by makeRelativePath for
 	// cross-host links or links outside the source root path).
 	if subPath == "ext" {
-		if qv, err := url.ParseQuery(rawQuery); err == nil {
+		if qv, err := url.ParseQuery(cleanQuery); err == nil {
 			if extURL := qv.Get("url"); extURL != "" {
 				cacheKey = "ext?url=" + url.QueryEscape(extURL)
 				if child, ok := tree.Children[cacheKey]; ok {
 					return child.Feed
 				}
 				h.logger.Info("on-demand ext fetch", "url", extURL)
-				feed, err := h.crawler.FetchPaginated(ctx, extURL, feedCfg.Auth)
+				feed, err := h.fetchWithPaginationLimit(ctx, extURL, feedCfg)
 				if err != nil {
 					h.logger.Error("on-demand ext fetch failed", "url", extURL, "error", err)
 					return nil
@@ -353,10 +368,10 @@ func (h *Handler) resolveFeed(ctx context.Context, tree *crawler.FeedTree, feedC
 	}
 
 	// Not in cache — fetch on demand from upstream.
-	upstreamURL := joinURL(tree.URL, subPath, rawQuery)
+	upstreamURL := joinURL(tree.URL, subPath, cleanQuery)
 	h.logger.Info("on-demand sub-feed fetch", "url", upstreamURL)
 
-	feed, err := h.crawler.FetchPaginated(ctx, upstreamURL, feedCfg.Auth)
+	feed, err := h.fetchWithPaginationLimit(ctx, upstreamURL, feedCfg)
 	if err != nil {
 		h.logger.Error("on-demand fetch failed", "url", upstreamURL, "error", err)
 		return nil
@@ -370,6 +385,165 @@ func (h *Handler) resolveFeed(ctx context.Context, tree *crawler.FeedTree, feedC
 	}
 
 	return feed
+}
+
+// fetchWithPaginationLimit fetches a feed using the feed's max_paginate setting.
+func (h *Handler) fetchWithPaginationLimit(ctx context.Context, feedURL string, feedCfg config.FeedConfig) (*opds.Feed, error) {
+	maxPages := feedCfg.MaxPaginate
+	if maxPages == 0 {
+		// No limit configured — fetch all pages.
+		return h.crawler.FetchPaginated(ctx, feedURL, feedCfg.Auth)
+	}
+	feed, _, _, err := h.crawler.FetchWithLimit(ctx, feedURL, feedCfg.Auth, maxPages)
+	return feed, err
+}
+
+// stripPaginationParams removes offset and limit query params.
+func stripPaginationParams(rawQuery string) string {
+	if rawQuery == "" {
+		return ""
+	}
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return rawQuery
+	}
+	values.Del("offset")
+	values.Del("limit")
+	return values.Encode()
+}
+
+// getMaxEntries returns the max entries per page for a feed.
+// Uses feed-specific setting if configured, otherwise server default.
+func (h *Handler) getMaxEntries(feedCfg config.FeedConfig) int {
+	if feedCfg.MaxEntries > 0 {
+		return feedCfg.MaxEntries
+	}
+	return h.cfg.Server.DefaultMaxEntries
+}
+
+// parsePaginationParams extracts offset and limit from query params.
+func (h *Handler) parsePaginationParams(r *http.Request, defaultLimit int) (offset, limit int) {
+	limit = defaultLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	return offset, limit
+}
+
+// paginateFeed slices the feed entries and generates pagination links.
+func (h *Handler) paginateFeed(feed *opds.Feed, basePath, rawQuery string, offset, limit int) *opds.Feed {
+	totalEntries := len(feed.Entries)
+	if totalEntries == 0 {
+		return feed
+	}
+
+	// Calculate bounds.
+	start := offset
+	if start > totalEntries {
+		start = totalEntries
+	}
+	end := start + limit
+	if end > totalEntries {
+		end = totalEntries
+	}
+
+	// Create a new feed with sliced entries.
+	out := *feed
+	out.Entries = feed.Entries[start:end]
+
+	// Set OpenSearch pagination elements.
+	out.TotalResults = totalEntries
+	out.ItemsPerPage = limit
+	out.StartIndex = start + 1 // OpenSearch uses 1-based indexing
+
+	// Build pagination links.
+	out.Links = h.addPaginationLinks(feed.Links, basePath, rawQuery, offset, limit, totalEntries)
+
+	return &out
+}
+
+// addPaginationLinks generates first/previous/next/last pagination links.
+func (h *Handler) addPaginationLinks(existingLinks []opds.Link, basePath, rawQuery string, offset, limit, total int) []opds.Link {
+	// Copy existing links, excluding any existing pagination links.
+	links := make([]opds.Link, 0, len(existingLinks)+4)
+	for _, l := range existingLinks {
+		if l.Rel != opds.RelFirst && l.Rel != opds.RelPrevious &&
+			l.Rel != opds.RelNext && l.Rel != opds.RelLast {
+			links = append(links, l)
+		}
+	}
+
+	// Helper to build pagination URL.
+	makeURL := func(newOffset int) string {
+		return buildPaginationURL(basePath, rawQuery, newOffset, limit)
+	}
+
+	// First link (always present for consistency).
+	links = append(links, opds.Link{
+		Rel:  opds.RelFirst,
+		Href: makeURL(0),
+		Type: opds.MediaTypeAtom,
+	})
+
+	// Previous link.
+	if offset > 0 {
+		prevOffset := offset - limit
+		if prevOffset < 0 {
+			prevOffset = 0
+		}
+		links = append(links, opds.Link{
+			Rel:  opds.RelPrevious,
+			Href: makeURL(prevOffset),
+			Type: opds.MediaTypeAtom,
+		})
+	}
+
+	// Next link.
+	if offset+limit < total {
+		links = append(links, opds.Link{
+			Rel:  opds.RelNext,
+			Href: makeURL(offset + limit),
+			Type: opds.MediaTypeAtom,
+		})
+	}
+
+	// Last link.
+	lastOffset := ((total - 1) / limit) * limit
+	if lastOffset < 0 {
+		lastOffset = 0
+	}
+	links = append(links, opds.Link{
+		Rel:  opds.RelLast,
+		Href: makeURL(lastOffset),
+		Type: opds.MediaTypeAtom,
+	})
+
+	return links
+}
+
+// buildPaginationURL constructs a URL with pagination params.
+func buildPaginationURL(basePath, rawQuery string, offset, limit int) string {
+	values, _ := url.ParseQuery(rawQuery)
+	// Remove existing pagination params.
+	values.Del("offset")
+	values.Del("limit")
+	// Add new pagination params.
+	if offset > 0 {
+		values.Set("offset", strconv.Itoa(offset))
+	}
+	values.Set("limit", strconv.Itoa(limit))
+
+	if len(values) > 0 {
+		return basePath + "?" + values.Encode()
+	}
+	return basePath
 }
 
 func writeOPDS(w http.ResponseWriter, feed *opds.Feed, logger *slog.Logger) {

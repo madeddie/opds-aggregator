@@ -2,11 +2,12 @@
 # Env vars override values from this file. If no config file is found,
 # the application can be configured entirely via env vars.
 #
-# Server:   OPDS_SERVER_ADDR, OPDS_SERVER_TITLE
+# Server:   OPDS_SERVER_ADDR, OPDS_SERVER_TITLE, OPDS_SERVER_DEFAULT_MAX_ENTRIES
 # Auth:     OPDS_AUTH_USERNAME, OPDS_AUTH_PASSWORD
 # Polling:  OPDS_POLLING_INTERVAL
 # Debug:    OPDS_DEBUG=true
 # Feeds:    OPDS_FEED_0_NAME, OPDS_FEED_0_URL, OPDS_FEED_0_POLL_DEPTH,
+#           OPDS_FEED_0_MAX_ENTRIES, OPDS_FEED_0_MAX_PAGINATE,
 #           OPDS_FEED_0_AUTH_USERNAME, OPDS_FEED_0_AUTH_PASSWORD
 #           (increment index for additional feeds: OPDS_FEED_1_*, etc.)
 
@@ -16,6 +17,9 @@ server:
   auth:
     username: "reader"
     password: "changeme"
+  # Default entries per page for server-side pagination (0 = unlimited).
+  # Individual feeds can override this with max_entries.
+  default_max_entries: 100
 
 polling:
   interval: "6h"
@@ -24,6 +28,9 @@ feeds:
   - name: "Project Gutenberg"
     url: "https://m.gutenberg.org/ebooks.opds/"
     poll_depth: 0
+    # Pagination settings for large catalogs:
+    max_entries: 50     # max entries per response page (0 = use server default)
+    max_paginate: 1     # max upstream pages to follow when fetching (0 = all)
 
   - name: "Standard Ebooks"
     url: "https://standardebooks.org/feeds/opds"
