@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -79,7 +80,8 @@ func (f FeedConfig) Slug() string {
 	return string(slug)
 }
 
-// Load reads config from the given YAML file path.
+// Load reads config from the given YAML file path, applies environment
+// variable overrides, then applies defaults and validates.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -89,11 +91,80 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
+	cfg.ApplyEnv()
 	cfg.applyDefaults()
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// LoadFromEnv builds a Config entirely from environment variables,
+// applies defaults, and validates. Used when no YAML file is available.
+func LoadFromEnv() (*Config, error) {
+	var cfg Config
+	cfg.ApplyEnv()
+	cfg.applyDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// ApplyEnv overlays environment variables onto the config.
+// For scalar fields, non-empty env vars override existing values.
+// For feeds, if any OPDS_FEED_* vars are set they replace all YAML-defined feeds.
+func (c *Config) ApplyEnv() {
+	if v := os.Getenv("OPDS_SERVER_ADDR"); v != "" {
+		c.Server.Addr = v
+	}
+	if v := os.Getenv("OPDS_SERVER_TITLE"); v != "" {
+		c.Server.Title = v
+	}
+	if v := os.Getenv("OPDS_POLLING_INTERVAL"); v != "" {
+		c.Polling.Interval = v
+	}
+
+	// Server auth from env.
+	authUser := os.Getenv("OPDS_AUTH_USERNAME")
+	authPass := os.Getenv("OPDS_AUTH_PASSWORD")
+	if authUser != "" || authPass != "" {
+		c.Server.Auth = &AuthConfig{Username: authUser, Password: authPass}
+	}
+
+	// Feeds from env (indexed, replaces YAML feeds if any are defined).
+	if feeds := feedsFromEnv(); len(feeds) > 0 {
+		c.Feeds = feeds
+	}
+}
+
+// feedsFromEnv scans OPDS_FEED_0_NAME, OPDS_FEED_1_NAME, ... and builds
+// FeedConfig entries. Stops at the first index where _NAME is not set.
+func feedsFromEnv() []FeedConfig {
+	var feeds []FeedConfig
+	for i := 0; ; i++ {
+		prefix := fmt.Sprintf("OPDS_FEED_%d_", i)
+		name := os.Getenv(prefix + "NAME")
+		if name == "" {
+			break
+		}
+		fc := FeedConfig{
+			Name: name,
+			URL:  os.Getenv(prefix + "URL"),
+		}
+		if v := os.Getenv(prefix + "POLL_DEPTH"); v != "" {
+			if depth, err := strconv.Atoi(v); err == nil {
+				fc.PollDepth = depth
+			}
+		}
+		feedUser := os.Getenv(prefix + "AUTH_USERNAME")
+		feedPass := os.Getenv(prefix + "AUTH_PASSWORD")
+		if feedUser != "" || feedPass != "" {
+			fc.Auth = &AuthConfig{Username: feedUser, Password: feedPass}
+		}
+		feeds = append(feeds, fc)
+	}
+	return feeds
 }
 
 func (c *Config) applyDefaults() {
