@@ -136,20 +136,28 @@ func (h *Handler) HandleSource(w http.ResponseWriter, r *http.Request) {
 		cached = &cache.CachedFeed{Tree: tree, UpdatedAt: time.Now()}
 	}
 
+	// Parse pagination params early — we need them for lazy-loading.
+	maxEntries := h.getMaxEntries(feedCfg)
+	offset, limit := 0, maxEntries
+	if maxEntries > 0 {
+		offset, limit = h.parsePaginationParams(r, maxEntries)
+	}
+
 	// Determine which feed in the tree to serve.
-	feed := h.resolveFeed(r.Context(), cached.Tree, feedCfg, subPath, rawQuery)
-	if feed == nil {
+	// Pass pagination params so resolveFeed can lazy-load if needed.
+	result := h.resolveFeed(r.Context(), cached.Tree, feedCfg, subPath, rawQuery, offset, limit)
+	if result == nil || result.Feed == nil {
 		http.Error(w, "feed not found", http.StatusNotFound)
 		return
 	}
 
+	feed := result.Feed
+
 	// Apply server-side pagination BEFORE link rewriting.
 	// This limits the number of entries we process and return.
-	maxEntries := h.getMaxEntries(feedCfg)
 	if maxEntries > 0 && len(feed.Entries) > 0 {
-		offset, limit := h.parsePaginationParams(r, maxEntries)
 		basePath := "/opds/source/" + slug + "/" + subPath
-		feed = h.paginateFeed(feed, basePath, rawQuery, offset, limit)
+		feed = h.paginateFeed(feed, basePath, rawQuery, offset, limit, result.HasMoreUpstream)
 	}
 
 	// Determine the upstream base URL for this sub-feed.
@@ -316,8 +324,15 @@ func (h *Handler) HandleRefreshAll(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
+// resolveFeedResult contains the feed and pagination metadata.
+type resolveFeedResult struct {
+	Feed            *opds.Feed
+	HasMoreUpstream bool
+}
+
 // resolveFeed finds the right feed to serve from the cached tree, given the sub-path.
-func (h *Handler) resolveFeed(ctx context.Context, tree *crawler.FeedTree, feedCfg config.FeedConfig, subPath, rawQuery string) *opds.Feed {
+// It also handles lazy-loading of additional upstream pages when needed.
+func (h *Handler) resolveFeed(ctx context.Context, tree *crawler.FeedTree, feedCfg config.FeedConfig, subPath, rawQuery string, offset, limit int) *resolveFeedResult {
 	subPath = strings.TrimPrefix(subPath, "/")
 	subPath = strings.TrimSuffix(subPath, "/")
 
@@ -328,7 +343,7 @@ func (h *Handler) resolveFeed(ctx context.Context, tree *crawler.FeedTree, feedC
 
 	// Root of this source.
 	if subPath == "" && cleanQuery == "" {
-		return tree.Feed
+		return h.resolveFeedWithLazyLoad(ctx, tree, feedCfg, offset, limit)
 	}
 
 	// Build a cache key that includes query params (without pagination).
@@ -339,7 +354,7 @@ func (h *Handler) resolveFeed(ctx context.Context, tree *crawler.FeedTree, feedC
 
 	// Check if we have this child in the cached tree.
 	if child, ok := tree.Children[cacheKey]; ok {
-		return child.Feed
+		return h.resolveFeedWithLazyLoad(ctx, child, feedCfg, offset, limit)
 	}
 
 	// Handle external URL references (produced by makeRelativePath for
@@ -349,20 +364,23 @@ func (h *Handler) resolveFeed(ctx context.Context, tree *crawler.FeedTree, feedC
 			if extURL := qv.Get("url"); extURL != "" {
 				cacheKey = "ext?url=" + url.QueryEscape(extURL)
 				if child, ok := tree.Children[cacheKey]; ok {
-					return child.Feed
+					return h.resolveFeedWithLazyLoad(ctx, child, feedCfg, offset, limit)
 				}
 				h.logger.Info("on-demand ext fetch", "url", extURL)
-				feed, err := h.fetchWithPaginationLimit(ctx, extURL, feedCfg)
+				feed, hasMore, nextURL, err := h.fetchWithPaginationLimit(ctx, extURL, feedCfg)
 				if err != nil {
 					h.logger.Error("on-demand ext fetch failed", "url", extURL, "error", err)
 					return nil
 				}
-				tree.Children[cacheKey] = &crawler.FeedTree{
-					Feed:     feed,
-					URL:      extURL,
-					Children: make(map[string]*crawler.FeedTree),
+				child := &crawler.FeedTree{
+					Feed:            feed,
+					URL:             extURL,
+					Children:        make(map[string]*crawler.FeedTree),
+					HasMoreUpstream: hasMore,
+					NextUpstreamURL: nextURL,
 				}
-				return feed
+				tree.Children[cacheKey] = child
+				return h.resolveFeedWithLazyLoad(ctx, child, feedCfg, offset, limit)
 			}
 		}
 	}
@@ -371,31 +389,76 @@ func (h *Handler) resolveFeed(ctx context.Context, tree *crawler.FeedTree, feedC
 	upstreamURL := joinURL(tree.URL, subPath, cleanQuery)
 	h.logger.Info("on-demand sub-feed fetch", "url", upstreamURL)
 
-	feed, err := h.fetchWithPaginationLimit(ctx, upstreamURL, feedCfg)
+	feed, hasMore, nextURL, err := h.fetchWithPaginationLimit(ctx, upstreamURL, feedCfg)
 	if err != nil {
 		h.logger.Error("on-demand fetch failed", "url", upstreamURL, "error", err)
 		return nil
 	}
 
 	// Cache the result for future requests.
-	tree.Children[cacheKey] = &crawler.FeedTree{
-		Feed:     feed,
-		URL:      upstreamURL,
-		Children: make(map[string]*crawler.FeedTree),
+	child := &crawler.FeedTree{
+		Feed:            feed,
+		URL:             upstreamURL,
+		Children:        make(map[string]*crawler.FeedTree),
+		HasMoreUpstream: hasMore,
+		NextUpstreamURL: nextURL,
+	}
+	tree.Children[cacheKey] = child
+
+	return h.resolveFeedWithLazyLoad(ctx, child, feedCfg, offset, limit)
+}
+
+// resolveFeedWithLazyLoad returns the feed from the tree, fetching additional
+// upstream pages if the requested offset exceeds the cached entries.
+func (h *Handler) resolveFeedWithLazyLoad(ctx context.Context, tree *crawler.FeedTree, feedCfg config.FeedConfig, offset, limit int) *resolveFeedResult {
+	if tree.Feed == nil {
+		return nil
 	}
 
-	return feed
+	// Check if we need to fetch more entries from upstream.
+	// We need more if the requested range extends beyond cached entries
+	// and there are more pages available.
+	for tree.HasMoreUpstream && offset+limit > len(tree.Feed.Entries) {
+		h.logger.Info("lazy-loading next upstream page",
+			"nextURL", tree.NextUpstreamURL,
+			"cachedEntries", len(tree.Feed.Entries),
+			"requestedOffset", offset,
+			"requestedLimit", limit)
+
+		feed, hasMore, nextURL, err := h.fetchWithPaginationLimit(ctx, tree.NextUpstreamURL, feedCfg)
+		if err != nil {
+			h.logger.Error("lazy-load fetch failed", "url", tree.NextUpstreamURL, "error", err)
+			// Return what we have — better than nothing.
+			break
+		}
+
+		// Append new entries to existing feed.
+		tree.Feed.Entries = append(tree.Feed.Entries, feed.Entries...)
+		tree.HasMoreUpstream = hasMore
+		tree.NextUpstreamURL = nextURL
+
+		h.logger.Info("lazy-load complete",
+			"newEntries", len(feed.Entries),
+			"totalCached", len(tree.Feed.Entries),
+			"hasMore", hasMore)
+	}
+
+	return &resolveFeedResult{
+		Feed:            tree.Feed,
+		HasMoreUpstream: tree.HasMoreUpstream,
+	}
 }
 
 // fetchWithPaginationLimit fetches a feed using the feed's max_paginate setting.
-func (h *Handler) fetchWithPaginationLimit(ctx context.Context, feedURL string, feedCfg config.FeedConfig) (*opds.Feed, error) {
+// Returns the feed, whether more upstream pages exist, and the URL for the next page.
+func (h *Handler) fetchWithPaginationLimit(ctx context.Context, feedURL string, feedCfg config.FeedConfig) (*opds.Feed, bool, string, error) {
 	maxPages := feedCfg.MaxPaginate
 	if maxPages == 0 {
 		// No limit configured — fetch all pages.
-		return h.crawler.FetchPaginated(ctx, feedURL, feedCfg.Auth)
+		feed, err := h.crawler.FetchPaginated(ctx, feedURL, feedCfg.Auth)
+		return feed, false, "", err
 	}
-	feed, _, _, err := h.crawler.FetchWithLimit(ctx, feedURL, feedCfg.Auth, maxPages)
-	return feed, err
+	return h.crawler.FetchWithLimit(ctx, feedURL, feedCfg.Auth, maxPages)
 }
 
 // stripPaginationParams removes offset and limit query params.
@@ -438,7 +501,9 @@ func (h *Handler) parsePaginationParams(r *http.Request, defaultLimit int) (offs
 }
 
 // paginateFeed slices the feed entries and generates pagination links.
-func (h *Handler) paginateFeed(feed *opds.Feed, basePath, rawQuery string, offset, limit int) *opds.Feed {
+// hasMoreUpstream indicates whether there are more pages available upstream
+// that haven't been fetched yet (used when the total is unknown).
+func (h *Handler) paginateFeed(feed *opds.Feed, basePath, rawQuery string, offset, limit int, hasMoreUpstream bool) *opds.Feed {
 	totalEntries := len(feed.Entries)
 	if totalEntries == 0 {
 		return feed
@@ -459,18 +524,22 @@ func (h *Handler) paginateFeed(feed *opds.Feed, basePath, rawQuery string, offse
 	out.Entries = feed.Entries[start:end]
 
 	// Set OpenSearch pagination elements.
+	// When hasMoreUpstream is true, we don't know the exact total.
+	// Use the cached count — readers handle incomplete totals gracefully.
 	out.TotalResults = totalEntries
 	out.ItemsPerPage = limit
 	out.StartIndex = start + 1 // OpenSearch uses 1-based indexing
 
 	// Build pagination links.
-	out.Links = h.addPaginationLinks(feed.Links, basePath, rawQuery, offset, limit, totalEntries)
+	out.Links = h.addPaginationLinks(feed.Links, basePath, rawQuery, offset, limit, totalEntries, hasMoreUpstream)
 
 	return &out
 }
 
 // addPaginationLinks generates first/previous/next/last pagination links.
-func (h *Handler) addPaginationLinks(existingLinks []opds.Link, basePath, rawQuery string, offset, limit, total int) []opds.Link {
+// When hasMoreUpstream is true, we always include a next link (unless the current
+// page has fewer than limit entries, indicating we've exhausted all content).
+func (h *Handler) addPaginationLinks(existingLinks []opds.Link, basePath, rawQuery string, offset, limit, total int, hasMoreUpstream bool) []opds.Link {
 	// Copy existing links, excluding any existing pagination links.
 	links := make([]opds.Link, 0, len(existingLinks)+4)
 	for _, l := range existingLinks {
@@ -506,7 +575,10 @@ func (h *Handler) addPaginationLinks(existingLinks []opds.Link, basePath, rawQue
 	}
 
 	// Next link.
-	if offset+limit < total {
+	// Include next link if:
+	// 1. There are more cached entries beyond the current page, OR
+	// 2. There are more upstream pages available (hasMoreUpstream)
+	if offset+limit < total || hasMoreUpstream {
 		links = append(links, opds.Link{
 			Rel:  opds.RelNext,
 			Href: makeURL(offset + limit),
@@ -514,16 +586,19 @@ func (h *Handler) addPaginationLinks(existingLinks []opds.Link, basePath, rawQue
 		})
 	}
 
-	// Last link.
-	lastOffset := ((total - 1) / limit) * limit
-	if lastOffset < 0 {
-		lastOffset = 0
+	// Last link — only include when we know the total (no more upstream pages).
+	// When hasMoreUpstream is true, we can't calculate the last page accurately.
+	if !hasMoreUpstream {
+		lastOffset := ((total - 1) / limit) * limit
+		if lastOffset < 0 {
+			lastOffset = 0
+		}
+		links = append(links, opds.Link{
+			Rel:  opds.RelLast,
+			Href: makeURL(lastOffset),
+			Type: opds.MediaTypeAtom,
+		})
 	}
-	links = append(links, opds.Link{
-		Rel:  opds.RelLast,
-		Href: makeURL(lastOffset),
-		Type: opds.MediaTypeAtom,
-	})
 
 	return links
 }
