@@ -17,10 +17,12 @@ import (
 
 // FeedTree represents a cached upstream feed and its navigable children.
 type FeedTree struct {
-	Feed     *opds.Feed
-	URL      string
-	Children map[string]*FeedTree // keyed by path relative to the source root
-	SearchURL string              // OpenSearch description URL, if found
+	Feed            *opds.Feed
+	URL             string
+	Children        map[string]*FeedTree // keyed by path relative to the source root
+	SearchURL       string               // OpenSearch description URL, if found
+	HasMoreUpstream bool                 // true if upstream has more pages available
+	NextUpstreamURL string               // URL for the next upstream page (if HasMoreUpstream)
 }
 
 // Crawler fetches upstream OPDS feeds.
