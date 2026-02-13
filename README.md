@@ -1,4 +1,5 @@
 # OPDS Aggregator
+![vibe-coded](https://img.shields.io/badge/vibe-coded-blue)
 
 A single-binary Go server that combines multiple OPDS 1.2 catalogs into one unified feed. Point your e-reader (KOReader, etc.) at a single URL and browse all your book sources in one place.
 
