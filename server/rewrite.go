@@ -83,13 +83,25 @@ func isAcquisitionRel(rel string) bool {
 
 // isAggregatorPath returns true if the href is an aggregator-local path.
 // This checks for specific aggregator route patterns rather than just /opds/
-// prefix, because upstream feeds may also use /opds/ paths (e.g., Calibre-Web).
+// prefix, because upstream feeds may also use /opds/ paths (e.g., Calibre-Web
+// uses /opds/download/{id}/{format}/ for acquisition links).
 func isAggregatorPath(href string) bool {
-	return strings.HasPrefix(href, "/opds/source/") ||
-		strings.HasPrefix(href, "/opds/download/") ||
-		strings.HasPrefix(href, "/opds/search/") ||
-		href == "/opds/search" ||
-		strings.HasPrefix(href, "/opds/search?")
+	if strings.HasPrefix(href, "/opds/source/") {
+		return true
+	}
+	// Aggregator download links always have ?url= parameter.
+	// Don't match bare /opds/download/ paths which upstream feeds may use.
+	if strings.HasPrefix(href, "/opds/download/") && strings.Contains(href, "?url=") {
+		return true
+	}
+	// Aggregator search links have either ?upstream= or ?q= parameters.
+	if strings.HasPrefix(href, "/opds/search/") && (strings.Contains(href, "?upstream=") || strings.Contains(href, "?q=")) {
+		return true
+	}
+	if href == "/opds/search" || strings.HasPrefix(href, "/opds/search?") {
+		return true
+	}
+	return false
 }
 
 func isOPDSFeedType(mediaType string) bool {
