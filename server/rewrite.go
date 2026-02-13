@@ -36,7 +36,9 @@ func rewriteLinks(links []opds.Link, slug, baseUpstreamURL, sourceRootURL, proxy
 
 func rewriteHref(l opds.Link, slug, baseUpstreamURL, sourceRootURL, proxyPrefix string) string {
 	// Skip links that are already local aggregator paths (e.g., pagination links).
-	if strings.HasPrefix(l.Href, "/opds/") {
+	// Check for specific aggregator path patterns, not just /opds/ prefix, because
+	// upstream feeds may also use /opds/ paths (e.g., Calibre-Web).
+	if isAggregatorPath(l.Href) {
 		return l.Href
 	}
 
@@ -77,6 +79,17 @@ func isAcquisitionRel(rel string) bool {
 		return true
 	}
 	return false
+}
+
+// isAggregatorPath returns true if the href is an aggregator-local path.
+// This checks for specific aggregator route patterns rather than just /opds/
+// prefix, because upstream feeds may also use /opds/ paths (e.g., Calibre-Web).
+func isAggregatorPath(href string) bool {
+	return strings.HasPrefix(href, "/opds/source/") ||
+		strings.HasPrefix(href, "/opds/download/") ||
+		strings.HasPrefix(href, "/opds/search/") ||
+		href == "/opds/search" ||
+		strings.HasPrefix(href, "/opds/search?")
 }
 
 func isOPDSFeedType(mediaType string) bool {
